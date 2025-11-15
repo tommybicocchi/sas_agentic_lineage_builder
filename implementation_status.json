@@ -1,0 +1,174 @@
+{
+  "modules": {
+    "config.py": {
+      "status": "implemented_and_tested",
+      "classes": [
+        "UnityConfig",
+        "TableConfig",
+        "LLMConfig",
+        "Config"
+      ],
+      "notes": [
+        "UnityConfig gestisce catalog/schema/volume con setup_catalog, setup_schema, setup_volume, setup_all.",
+        "TableConfig definisce i nomi logici e gli schemi DDL delle tabelle Delta e fornisce metodi per crearle o dropparle.",
+        "LLMConfig contiene i parametri base del modello LLM (nome modello, temperatura, max_tokens, retry).",
+        "Config aggrega unity/tables/llm e fornisce setup_all(spark) per creare catalog/schema/volume e tutte le tabelle."
+      ]
+    },
+    "utils/delta_helpers.py": {
+      "status": "implemented_minimal",
+      "functions": [
+        "_ensure_catalog_schema",
+        "table_exists",
+        "create_table",
+        "write_dataframe",
+        "read_table"
+      ],
+      "notes": [
+        "_ensure_catalog_schema esegue USE CATALOG e USE SCHEMA.",
+        "table_exists prova a leggere la tabella e ritorna False in caso di AnalysisException.",
+        "create_table usa il DDL di TableConfig.get_table_schemas() per creare la tabella Delta.",
+        "write_dataframe crea la tabella se non esiste e scrive il DataFrame con saveAsTable.",
+        "read_table legge la tabella come DataFrame."
+      ]
+    },
+    "orchestration/state_manager.py": {
+      "status": "implemented_and_tested",
+      "class": "StateManager",
+      "methods": [
+        "create_workflow",
+        "update_stage_status",
+        "save_checkpoint",
+        "load_checkpoint"
+      ],
+      "notes": [
+        "Usa la tabella workflow_state per tracciare lo stato del workflow.",
+        "create_workflow inserisce una riga iniziale con stage='INIT' e status iniziale.",
+        "update_stage_status appende una nuova riga per ogni update di stato (no upsert).",
+        "save_checkpoint salva dati serializzati in JSON in checkpoint_data con status='CHECKPOINT'.",
+        "load_checkpoint recupera il checkpoint più recente per workflow_id e stage."
+      ]
+    },
+    "agents/base_agent.py": {
+      "status": "implemented_skeleton",
+      "class": "BaseAgent",
+      "methods": [
+        "__init__",
+        "execute",
+        "log_execution",
+        "handle_error"
+      ],
+      "notes": [
+        "BaseAgent è una classe astratta che riceve config, spark, state_manager, llm_client, workflow_id.",
+        "execute è astratto e deve essere implementato da ogni agente.",
+        "log_execution chiama StateManager.update_stage_status e, opzionalmente, save_checkpoint.",
+        "handle_error logga lo stato FAILED e ritorna un dizionario strutturato con info sull'errore."
+      ]
+    },
+    "agents/parser_agent.py": {
+      "status": "implemented_with_sas_parser_and_tested",
+      "class": "ParserAgent",
+      "methods": [
+        "__init__",
+        "execute",
+        "parse_repository",
+        "extract_dependencies",
+        "_get_extract_dependencies_udf"
+      ],
+      "notes": [
+        "ParserAgent estende BaseAgent ed è responsabile della parsificazione statica dei file SAS.",
+        "execute(volume_path) gestisce lo stage 'PARSE', chiama parse_repository e ritorna status='success' anche se non ci sono file .sas (num_files=0).",
+        "parse_repository(volume_path) legge i file .sas usando spark.read.text(volume_path + '/*.sas'), gestisce AnalysisException per path non esistente, e scrive su raw_dependencies.",
+        "extract_dependencies(code) usa utils.sas_parser.parse_dependencies(code) per estrarre input/output datasets, macro calls, include files, flag di dipendenze dinamiche e proc_types.",
+        "_get_extract_dependencies_udf wrappa extract_dependencies in una UDF Spark che restituisce una struct con i campi richiesti da raw_dependencies."
+      ]
+    },
+    "utils/sas_parser.py": {
+      "status": "implemented_and_tested",
+      "functions": [
+        "extract_input_datasets",
+        "extract_output_datasets",
+        "extract_macro_calls",
+        "extract_include_files",
+        "extract_proc_types",
+        "detect_dynamic_dependencies",
+        "parse_dependencies"
+      ],
+      "notes": [
+        "Implementa regex di base per DATA, SET, MERGE, PROC, %INCLUDE, %MACRO e macro calls.",
+        "extract_input_datasets analizza SET e MERGE per identificare dataset di input.",
+        "extract_output_datasets analizza DATA step e pattern out=/data= per identificare dataset di output.",
+        "extract_macro_calls trova chiamate di macro del tipo %nome(...).",
+        "extract_include_files trova path nei %INCLUDE 'path' o \"path\".",
+        "extract_proc_types individua i tipi di PROC (es. sort, sql, means).",
+        "detect_dynamic_dependencies ritorna True se trova macro variabili (&var).",
+        "parse_dependencies aggrega tutti i risultati in un dict pronto per raw_dependencies."
+      ]
+    },
+    "tests/dummy_agent.py": {
+      "status": "helper_for_testing",
+      "class": "DummyAgent",
+      "notes": [
+        "DummyAgent estende BaseAgent ed è usato solo per testare BaseAgent + StateManager.",
+        "execute logga STARTED, crea un finto result, logga un CHECKPOINT tramite extra_info, e poi SUCCESS.",
+        "Ritorna sempre status='success' se non ci sono eccezioni."
+      ]
+    }
+  },
+  "tests": {
+    "tests/test_state_manager.py": {
+      "status": "manual_run_ok",
+      "entrypoint": "run_tests(spark)",
+      "notes": [
+        "Esegue Config.setup_all(spark).",
+        "Inizializza StateManager.",
+        "Crea un workflow di test.",
+        "Aggiorna lo stage PARSE (STARTED, SUCCESS).",
+        "Salva e ricarica un checkpoint.",
+        "Verifica che nella tabella workflow_state siano presenti gli status attesi."
+      ]
+    },
+    "tests/test_base_agent_dummy.py": {
+      "status": "manual_run_ok",
+      "entrypoint": "run_tests(spark)",
+      "notes": [
+        "Usa DummyAgent per testare BaseAgent.log_execution + StateManager.",
+        "Crea workflow di test, esegue DummyAgent.execute().",
+        "Verifica che in workflow_state esistano righe con stage='DUMMY' e status STARTED/SUCCESS."
+      ]
+    },
+    "tests/test_parser_agent_skeleton.py": {
+      "status": "manual_run_ok",
+      "entrypoint": "run_tests(spark)",
+      "notes": [
+        "Setup Config e StateManager, crea un workflow di test.",
+        "Istanzia ParserAgent e chiama execute(unity.volume_path).",
+        "Gestisce il caso in cui il path del volume non esiste o è vuoto: ParserAgent ritorna status='success' con num_files=0.",
+        "Verifica che la lettura di raw_dependencies non esploda; non forza un minimo di righe perché potrebbe non esserci ancora alcun file .sas."
+      ]
+    },
+    "tests/test_sas_parser_basic.py": {
+      "status": "manual_run_ok",
+      "entrypoint": "run_tests()",
+      "notes": [
+        "Testa utils.sas_parser.parse_dependencies su una stringa SAS fittizia.",
+        "Verifica che input/output datasets, macro calls, include_files, proc_types e has_dynamic_deps siano estratti correttamente."
+      ]
+    },
+    "tests/test_parser_agent_with_sas_parser.py": {
+      "status": "manual_run_ok",
+      "entrypoint": "run_tests(spark)",
+      "notes": [
+        "Crea un file .sas di test nel volume Unity Catalog.",
+        "Chiama ParserAgent.parse_repository sul path di test.",
+        "Verifica che raw_dependencies contenga una riga per quel file con input_datasets, output_datasets e proc_types coerenti con il codice SAS.",
+        "Dimostra l'integrazione ParserAgent + sas_parser su file reali nel volume (pattern non ricorsivo *.sas)."
+      ]
+    }
+  },
+  "next_steps": [
+    "design_resolver_agent_skeleton",
+    "design_context_agent_skeleton",
+    "add_basic_validation_on_raw_dependencies"
+  ]
+}
